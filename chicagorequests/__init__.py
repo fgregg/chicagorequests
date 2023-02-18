@@ -91,10 +91,9 @@ def main(date_start: datetime.datetime, date_end: datetime.datetime) -> None:
 
     intervals = day_intervals(start_datetime, end_datetime)
 
-    with (
-        Downloader(requests_per_minute=0, retry_attempts=3) as downloader,
-        multiprocessing.dummy.Pool(15) as pool,
-    ):
+    downloader = Downloader(requests_per_minute=0, retry_attempts=3)
+
+    with multiprocessing.dummy.Pool(15) as pool:
         for day in tqdm.tqdm(
             pool.imap_unordered(downloader, intervals),
             total=(end_datetime - start_datetime).days + 1,
