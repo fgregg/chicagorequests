@@ -99,7 +99,7 @@ def main(date_start: datetime.datetime, date_end: datetime.datetime) -> None:
             pool.imap_unordered(downloader, intervals),
             total=(end_datetime - start_datetime).days + 1,
             colour="green",
-            unit="days",
+            unit="day",
         ):
             for result in day:
                 click.echo(json.dumps(result))
