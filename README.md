@@ -3,7 +3,7 @@ Bulk downloader for 311 Requests from the Chicago Open311 API.
 
 ## To install:
 ```console
-pip install chicagorequests
+> pip install chicagorequests
 ```
 
 ## To use
@@ -11,45 +11,58 @@ pip install chicagorequests
 ### Today's Requests
 To download today's requests, run:
 ```console
-chicagorequests
+> chicagorequests
 ```
 
 The program will output the requests as line-delimited json. To turn this into a
 standard json file, you can use a program like `jq`.
 
 ```console
-chicagorequests | jq -s '.'
+> chicagorequests | jq -s '.'
 ```
 
 ### Date Range Request
 To download all requests within a time span: 
 
 ```console
-chicagorequests --start-date=2021-01-01 --end-date=2021-01-14
+> chicagorequests --start-date=2021-01-01 --end-date=2021-01-14
 ```
 
 ### Limit to specific request types
 To download grafitti removal requests made today:
 
 ```console
-chicagorequests -t graffiti_removal 
+> chicagorequests -t graffiti_removal 
 ```
 
 You can specify more than one type of request
 
 ```console
-chicagorequests -t graffiti_removal -t pothole 
+> chicagorequests -t graffiti_removal -t pothole 
 ```
 
 ### To get help
 ```console
-chicagorequests --help
+> chicagorequests --help
+Usage: chicagorequests [OPTIONS]
+
+  Download service requests from the Chicago Open311 API. By default, today's
+  requests of all types. Will write service requests as line-delimited JSON to
+  stdout.
+
+Options:
+  -s, --start-date [%Y-%m-%d]  the first day of the time range to check
+  -e, --end-date [%Y-%m-%d]    the last day of the time range to check
+  -t, --request-type TEXT      service types to fetch
+  -v, --verbose                verbosity level
+  --list-request-types         list valid request types
+  --help                       Show this message and exit.
 ```
 
 ### To see all request types:
 
 ```console
->  chicagorequests --list-request-types
+> chicagorequests --list-request-types
 type                             definition
 -------------------------------  ----------------------------------------
 abandoned_vehicle                Abandoned Vehicle Complaint
