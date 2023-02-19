@@ -177,8 +177,7 @@ def main(
     json_file = None
     if save_json:
         timestamp = int(datetime.datetime.now().timestamp())
-        filename = f'chicagorequests_{timestamp}.json'
-        print(f'Saving file as {filename}')
+        filename = f'chicagorequests_{timestamp}.out'
         json_file = open(filename, 'w', encoding='utf-8')
 
     with multiprocessing.dummy.Pool(15) as pool:
@@ -194,3 +193,5 @@ def main(
                 click.echo(json.dumps(result))
         if json_file:
             json_file.close()
+            click.echo(f'Saved file as {filename}', err=True)
+
