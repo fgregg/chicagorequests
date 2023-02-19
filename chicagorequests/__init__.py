@@ -3,10 +3,12 @@ import json
 import logging
 import multiprocessing.dummy
 import sys
+import warnings
 import zoneinfo
 from typing import Any, Generator, Iterable
 
 import click
+import requests.adapters
 import scrapelib
 import tabulate
 import tqdm
@@ -24,6 +26,9 @@ class Downloader(scrapelib.Scraper):
         super().__init__(requests_per_minute=0, retry_attempts=5, retry_wait_seconds=10)
         self.timeout = 30
 
+        adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
+        self.mount("http://", adapter)
+
         if request_type:
             self.args = {
                 "extensions": "true",
@@ -37,7 +42,7 @@ class Downloader(scrapelib.Scraper):
             }
 
     def prepare_args(
-        self, start: datetime.datetime, end: datetime.datetime
+        self, start: datetime.datetime, end: datetime.datetime, page_size: int
     ) -> dict[str, Any]:
         args = self.args.copy()
         args.update(
@@ -45,6 +50,7 @@ class Downloader(scrapelib.Scraper):
                 "start_date": start.isoformat(),
                 "end_date": end.isoformat(),
                 "page": 1,
+                "page_size": page_size,
             }
         )
         return args
@@ -54,14 +60,22 @@ class Downloader(scrapelib.Scraper):
     ) -> list[dict[str, Any]]:
         start, end = interval
         results = []
-        page_size = 50
-        args = self.prepare_args(start, end)
+        page_size = 200
+        args = self.prepare_args(start, end, page_size)
         page = self.get(self.BASE_URL, params=args).json()
         results.extend(page)
 
         while len(page) == page_size:
             args["page"] += 1
-            page = self.get(self.BASE_URL, params=args).json()
+            try:
+                page = self.get(self.BASE_URL, params=args).json()
+            except scrapelib.HTTPError as e:
+                warnings.warn(
+                    "Could not load {url}. We will miss some requests from {date}".format(
+                        url=e.response.request.url, date=start.date()
+                    )
+                )
+                page = []
             results.extend(page)
 
         return results
@@ -160,7 +174,7 @@ def main(
         for day in tqdm.tqdm(
             pool.imap_unordered(downloader, intervals),
             total=(end_datetime - start_datetime).days + 1,
-            colour="green",
+            colour="#228b22",
             unit="day",
         ):
             for result in day:
