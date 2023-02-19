@@ -1,12 +1,17 @@
 import datetime
 import json
+import logging
 import multiprocessing.dummy
+import sys
 import zoneinfo
 from typing import Any, Generator, Iterable
 
 import click
 import scrapelib
+import tabulate
 import tqdm
+
+from .request_types import request_types
 
 Interval = Iterable[tuple[datetime.datetime, datetime.datetime]]
 
@@ -14,16 +19,35 @@ Interval = Iterable[tuple[datetime.datetime, datetime.datetime]]
 class Downloader(scrapelib.Scraper):
     BASE_URL = "http://311api.cityofchicago.org/open311/v2/requests.json"
 
-    @staticmethod
+    def __init__(self, request_type=None):
+
+        super().__init__(requests_per_minute=0, retry_attempts=5, retry_wait_seconds=10)
+        self.timeout = 30
+
+        if request_type:
+            self.args = {
+                "extensions": "true",
+                "service_code": ",".join(
+                    request_types[r_type]["service_code"] for r_type in request_type
+                ),
+            }
+        else:
+            self.args = {
+                "extensions": "true",
+            }
+
     def prepare_args(
-        start: datetime.datetime, end: datetime.datetime
+        self, start: datetime.datetime, end: datetime.datetime
     ) -> dict[str, Any]:
-        return {
-            "start_date": start.isoformat(),
-            "end_date": end.isoformat(),
-            "extensions": "true",
-            "page": 1,
-        }
+        args = self.args.copy()
+        args.update(
+            {
+                "start_date": start.isoformat(),
+                "end_date": end.isoformat(),
+                "page": 1,
+            }
+        )
+        return args
 
     def __call__(
         self, interval: tuple[datetime.datetime, datetime.datetime]
@@ -72,26 +96,65 @@ def day_intervals(
 
 @click.command()
 @click.option(
-    "--date-start",
+    "-s",
+    "--start-date",
     type=click.DateTime(formats=["%Y-%m-%d"]),
     default=datetime.datetime.today(),
+    help="the first day of the time range to check",
 )
 @click.option(
-    "--date-end",
+    "-e",
+    "--end-date",
     type=click.DateTime(formats=["%Y-%m-%d"]),
     default=datetime.datetime.today(),
+    help="the last day of the time range to check",
 )
-def main(date_start: datetime.datetime, date_end: datetime.datetime) -> None:
-    start_datetime = datetime.datetime.combine(date_start, datetime.time.min).replace(
+@click.option("-t", "--request-type", multiple=True, help="service types to fetch")
+@click.option("-v", "--verbose", count=True, help="verbosity level")
+@click.option(
+    "--list-request-types", is_flag=True, default=False, help="list valid request types"
+)
+def main(
+    start_date: datetime.datetime,
+    end_date: datetime.datetime,
+    verbose: int,
+    request_type,
+    list_request_types,
+) -> None:
+    """Download service requests from the Chicago Open311 API. By
+    default, today's requests of all types. Will write service
+    requests as line-delimited JSON to stdout."""
+
+    for r_type in request_type:
+        if r_type not in request_types:
+            raise click.BadParameter(
+                f"{r_type} is not a valid request type. To see valid types run 'chicagorequests --list-request-types'"
+            )
+
+    if list_request_types:
+        table = tabulate.tabulate(
+            [(k, v["service_name"]) for k, v in request_types.items()],
+            headers=["type", "definition"],
+            maxcolwidths=40,
+        )
+        click.echo(table)
+        sys.exit()
+
+    if verbose >= 2:
+        logging.basicConfig(level=logging.DEBUG)
+    elif verbose == 1:
+        logging.basicConfig(level=logging.INFO)
+
+    start_datetime = datetime.datetime.combine(start_date, datetime.time.min).replace(
         tzinfo=zoneinfo.ZoneInfo("America/Chicago")
     )
-    end_datetime = datetime.datetime.combine(date_end, datetime.time.max).replace(
+    end_datetime = datetime.datetime.combine(end_date, datetime.time.max).replace(
         tzinfo=zoneinfo.ZoneInfo("America/Chicago")
     )
 
     intervals = day_intervals(start_datetime, end_datetime)
 
-    downloader = Downloader(requests_per_minute=0, retry_attempts=3)
+    downloader = Downloader(request_type=request_type)
 
     with multiprocessing.dummy.Pool(15) as pool:
         for day in tqdm.tqdm(
