@@ -8,7 +8,7 @@ long_description = (this_directory / "README.md").read_text()
 
 setup(
     name="chicagorequests",
-    version="0.0.2",
+    version="0.0.3",
     author="Forest Gregg",
     author_email="fgregg@datamade.us",
     url="https://github.com/fgregg/chicagorequests/",
