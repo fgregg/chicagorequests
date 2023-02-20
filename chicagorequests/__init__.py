@@ -62,7 +62,15 @@ class Downloader(scrapelib.Scraper):
         results = []
         page_size = 200
         args = self.prepare_args(start, end, page_size)
-        page = self.get(self.BASE_URL, params=args).json()
+        try:
+            page = self.get(self.BASE_URL, params=args).json()
+        except scrapelib.HTTPError as e:
+            warnings.warn(
+                "Could not load {url}. We will miss some requests from {date}".format(
+                    url=e.response.request.url, date=start.date()
+                )
+            )
+            page = []
         results.extend(page)
 
         while len(page) == page_size:
