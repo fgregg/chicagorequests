@@ -136,12 +136,17 @@ def day_intervals(
 @click.option(
     "--list-request-types", is_flag=True, default=False, help="list valid request types"
 )
+@click.option(
+    "--save-json", is_flag=True, default=False, help="save output as json (datestamp as filename)"
+)
+
 def main(
     start_date: datetime.datetime,
     end_date: datetime.datetime,
     verbose: int,
     request_type,
     list_request_types,
+    save_json,
 ) -> None:
     """Download service requests from the Chicago Open311 API. By
     default, today's requests of all types. Will write service
@@ -177,6 +182,11 @@ def main(
     intervals = day_intervals(start_datetime, end_datetime)
 
     downloader = Downloader(request_type=request_type)
+    json_file = None
+    if save_json:
+        timestamp = int(datetime.datetime.now().timestamp())
+        filename = f'chicagorequests_{timestamp}.out'
+        json_file = open(filename, 'w', encoding='utf-8')
 
     with multiprocessing.dummy.Pool(15) as pool:
         for day in tqdm.tqdm(
@@ -186,4 +196,10 @@ def main(
             unit="day",
         ):
             for result in day:
+                if json_file:
+                    json.dump(result, json_file, ensure_ascii=False, indent=2)
                 click.echo(json.dumps(result))
+        if json_file:
+            json_file.close()
+            click.echo(f'Saved file as {filename}', err=True)
+
