@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "chicagorequests"
-version = "0.0.3"
+version = "0.0.4"
 authors = [{name = "Forest Gregg", email = "fgregg@datamade.us"}]
 description = "command line tool for downloading Chicago Open311 data"
 dependencies = ["click", "tqdm", "scrapelib", "tabulate"]
