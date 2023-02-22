@@ -18,25 +18,36 @@ from .request_types import request_types
 Interval = Iterable[tuple[datetime.datetime, datetime.datetime]]
 
 
-class Downloader(scrapelib.Scraper):
+class APIScraper(scrapelib.Scraper):
+    def request(self, method, url, **kwargs):
+        response = super().request(method, url, **kwargs)
+
+        self._check_errors(response)
+
+        return response
+
+    def _check_errors(self, response):
+
+        try:
+            response.json()
+        except json.decoder.JSONDecodeError:
+            response.status_code = 500
+            raise scrapelib.HTTPError(response)
+
+
+class Downloader:
     BASE_URL = "http://311api.cityofchicago.org/open311/v2/requests.json"
 
     def __init__(
         self, request_type=None, updated_start_date=None, updated_end_date=None
     ):
 
-        super().__init__(requests_per_minute=0, retry_attempts=5, retry_wait_seconds=10)
-        self.timeout = 30
-
-        adapter = requests.adapters.HTTPAdapter(pool_connections=100, pool_maxsize=100)
-        self.mount("http://", adapter)
+        self._session = None
 
         if request_type:
             self.args = {
                 "extensions": "true",
-                "service_code": ",".join(
-                    request_types[r_type]["service_code"] for r_type in request_type
-                ),
+                "service_code": ",".join(request_type),
             }
         else:
             self.args = {
@@ -50,6 +61,16 @@ class Downloader(scrapelib.Scraper):
                     "updated_before": updated_end_date,
                 }
             )
+
+    @property
+    def session(self):
+        if not self._session:
+            self._session = APIScraper(
+                requests_per_minute=0, retry_attempts=5, retry_wait_seconds=10
+            )
+            self._session.timeout = 30
+
+        return self._session
 
     def prepare_args(
         self, start: datetime.datetime, end: datetime.datetime, page_size: int
@@ -73,7 +94,7 @@ class Downloader(scrapelib.Scraper):
         page_size = 200
         args = self.prepare_args(start, end, page_size)
         try:
-            page = self.get(self.BASE_URL, params=args).json()
+            page = self.session.get(self.BASE_URL, params=args).json()
         except scrapelib.HTTPError as e:
             warnings.warn(
                 "Could not load {url}. We will miss some requests from {date}".format(
@@ -86,7 +107,7 @@ class Downloader(scrapelib.Scraper):
         while len(page) == page_size:
             args["page"] += 1
             try:
-                page = self.get(self.BASE_URL, params=args).json()
+                page = self.session.get(self.BASE_URL, params=args).json()
             except scrapelib.HTTPError as e:
                 warnings.warn(
                     "Could not load {url}. We will miss some requests from {date}".format(
@@ -97,21 +118,6 @@ class Downloader(scrapelib.Scraper):
             results.extend(page)
 
         return results
-
-    def request(self, method, url, **kwargs):
-        response = super().request(method, url, **kwargs)
-
-        self._check_errors(response)
-
-        return response
-
-    def _check_errors(self, response):
-
-        try:
-            response.json()
-        except json.decoder.JSONDecodeError:
-            response.status_code = 500
-            raise scrapelib.HTTPError(response)
 
 
 def day_intervals(
