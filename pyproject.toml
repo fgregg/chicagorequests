@@ -1,0 +1,24 @@
+[build-system]
+requires = ["setuptools>=61.2"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "chicagorequests"
+version = "0.0.3"
+authors = [{name = "Forest Gregg", email = "fgregg@datamade.us"}]
+description = "command line tool for downloading Chicago Open311 data"
+dependencies = ["click", "tqdm", "scrapelib", "tabulate"]
+
+[project.readme]
+file = "README.md"
+content-type = "text/markdown"
+
+[project.urls]
+Homepage = "https://github.com/fgregg/chicagorequests/"
+
+[project.scripts]
+chicagorequests = "chicagorequests:main"
+
+[tool.setuptools]
+packages = ["chicagorequests"]
+include-package-data = false

@@ -21,7 +21,9 @@ Interval = Iterable[tuple[datetime.datetime, datetime.datetime]]
 class Downloader(scrapelib.Scraper):
     BASE_URL = "http://311api.cityofchicago.org/open311/v2/requests.json"
 
-    def __init__(self, request_type=None):
+    def __init__(
+        self, request_type=None, updated_start_date=None, updated_end_date=None
+    ):
 
         super().__init__(requests_per_minute=0, retry_attempts=5, retry_wait_seconds=10)
         self.timeout = 30
@@ -40,6 +42,14 @@ class Downloader(scrapelib.Scraper):
             self.args = {
                 "extensions": "true",
             }
+
+        if updated_start_date:
+            self.args.update(
+                {
+                    "updated_after": updated_start_date,
+                    "updated_before": updated_end_date,
+                }
+            )
 
     def prepare_args(
         self, start: datetime.datetime, end: datetime.datetime, page_size: int
@@ -116,44 +126,17 @@ def day_intervals(
         start += datetime.timedelta(days=1)
 
 
-@click.command()
-@click.option(
-    "-s",
-    "--start-date",
-    type=click.DateTime(formats=["%Y-%m-%d"]),
-    default=datetime.datetime.today(),
-    help="the first day of the time range to check",
-)
-@click.option(
-    "-e",
-    "--end-date",
-    type=click.DateTime(formats=["%Y-%m-%d"]),
-    default=datetime.datetime.today(),
-    help="the last day of the time range to check",
-)
-@click.option("-t", "--request-type", multiple=True, help="service types to fetch")
-@click.option("-v", "--verbose", count=True, help="verbosity level")
-@click.option(
-    "--list-request-types", is_flag=True, default=False, help="list valid request types"
-)
-def main(
-    start_date: datetime.datetime,
-    end_date: datetime.datetime,
-    verbose: int,
-    request_type,
-    list_request_types,
-) -> None:
-    """Download service requests from the Chicago Open311 API. By
-    default, today's requests of all types. Will write service
-    requests as line-delimited JSON to stdout."""
-
-    for r_type in request_type:
+def validate_request_type(ctx, _, types):
+    for r_type in request_types:
         if r_type not in request_types:
             raise click.BadParameter(
                 f"{r_type} is not a valid request type. To see valid types run 'chicagorequests --list-request-types'"
             )
+    return [request_types[r_type]["service_code"] for r_type in types]
 
-    if list_request_types:
+
+def list_request_types(ctx, _, show_list):
+    if show_list:
         table = tabulate.tabulate(
             [(k, v["service_name"]) for k, v in request_types.items()],
             headers=["type", "definition"],
@@ -162,26 +145,156 @@ def main(
         click.echo(table)
         sys.exit()
 
+
+def set_logging_level(ctx, _, verbose):
     if verbose >= 2:
         logging.basicConfig(level=logging.DEBUG)
     elif verbose == 1:
         logging.basicConfig(level=logging.INFO)
 
-    start_datetime = datetime.datetime.combine(start_date, datetime.time.min).replace(
+
+def prepare_early_time(ctx, _, early_time):
+    if early_time:
+        early_time = datetime.datetime.combine(early_time, datetime.time.min).replace(
+            tzinfo=zoneinfo.ZoneInfo("America/Chicago")
+        )
+    return early_time
+
+
+def prepare_late_time(ctx, _, late_time):
+    if late_time:
+        late_time = datetime.datetime.combine(late_time, datetime.time.max).replace(
+            tzinfo=zoneinfo.ZoneInfo("America/Chicago")
+        )
+    return late_time
+
+
+def default_intervals(
+    start_date,
+    end_date,
+    updated_start_date,
+    updated_end_date,
+):
+
+    EARLIEST_DATE = datetime.datetime(2018, 7, 18).replace(
         tzinfo=zoneinfo.ZoneInfo("America/Chicago")
     )
-    end_datetime = datetime.datetime.combine(end_date, datetime.time.max).replace(
-        tzinfo=zoneinfo.ZoneInfo("America/Chicago")
+    TODAY = prepare_late_time(None, None, datetime.datetime.today())
+
+    if end_date:
+        if start_date and start_date >= end_date:
+            raise click.UsageError("--end-date must be after --start-date")
+        elif end_date < EARLIEST_DATE:
+            sys.exit()
+        elif end_date > TODAY:
+            end_date = TODAY
+        elif not start_date:
+            start_date = EARLIEST_DATE
+
+    if start_date and not end_date:
+        end_date = TODAY
+
+    if updated_end_date:
+        if updated_start_date and updated_start_date >= updated_end_date:
+            raise click.UsageError(
+                "--updated-end-date must be after --updated-start-date"
+            )
+        elif updated_end_date < EARLIEST_DATE:
+            sys.exit()
+        elif updated_end_date > TODAY:
+            updated_end_date = TODAY
+        elif not updated_start_date:
+            updated_start_date = EARLIEST_DATE
+
+    if updated_start_date and not updated_end_date:
+        updated_end_date = TODAY
+
+    if not start_date and not updated_start_date:
+        start_date = prepare_early_time(None, None, datetime.datetime.today())
+        end_date = TODAY
+    elif updated_start_date and not start_date:
+        start_date = EARLIEST_DATE
+        if updated_end_date:
+            end_date = updated_end_date
+        else:
+            end_date = TODAY
+
+    return start_date, end_date, updated_start_date, updated_end_date
+
+
+@click.command()
+@click.option(
+    "-s",
+    "--start-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="the first day of the time range to check for created service requests",
+    callback=prepare_early_time,
+)
+@click.option(
+    "-e",
+    "--end-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="the last day of the time range to check for created service requests",
+    callback=prepare_late_time,
+)
+@click.option(
+    "--updated-start-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="the first day of the time to check for updated service requests",
+    callback=prepare_early_time,
+)
+@click.option(
+    "--updated-end-date",
+    type=click.DateTime(formats=["%Y-%m-%d"]),
+    help="the last day of the time to check for updated service requests",
+    callback=prepare_late_time,
+)
+@click.option(
+    "-t",
+    "--request-type",
+    multiple=True,
+    help="service types to fetch",
+    callback=validate_request_type,
+)
+@click.option(
+    "-v", "--verbose", count=True, help="verbosity level", callback=set_logging_level
+)
+@click.option(
+    "--list-request-types",
+    is_flag=True,
+    default=False,
+    help="list valid request types",
+    callback=list_request_types,
+)
+def main(
+    start_date: datetime.datetime,
+    end_date: datetime.datetime,
+    updated_start_date: datetime.datetime,
+    updated_end_date: datetime.datetime,
+    verbose: int,
+    request_type,
+    list_request_types,
+) -> None:
+    """Download service requests from the Chicago Open311 API. By
+    default, today's requests of all types. Will write service
+    requests as line-delimited JSON to stdout."""
+
+    start_date, end_date, updated_start_date, updated_end_date = default_intervals(
+        start_date, end_date, updated_start_date, updated_end_date
     )
 
-    intervals = day_intervals(start_datetime, end_datetime)
+    intervals = day_intervals(start_date, end_date)
 
-    downloader = Downloader(request_type=request_type)
+    downloader = Downloader(
+        request_type=request_type,
+        updated_start_date=updated_start_date,
+        updated_end_date=updated_end_date,
+    )
 
     with multiprocessing.dummy.Pool(15) as pool:
         for day in tqdm.tqdm(
             pool.imap_unordered(downloader, intervals),
-            total=(end_datetime - start_datetime).days + 1,
+            total=(end_date - start_date).days + 1,
             colour="#228b22",
             unit="day",
         ):
