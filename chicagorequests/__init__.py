@@ -128,7 +128,8 @@ class Downloader:
                         logging.warn(
                             "Could not load {url}. We will miss this request from {date}".format(
                                 url=e.response.request.url, date=args["start_date"][:10]
-                            )
+                            ),
+                            extra={"log_type": "request_missed"},
                         )
 
     def __call__(
@@ -194,16 +195,20 @@ def list_request_types(ctx, _, show_list):
         sys.exit()
 
 
-def set_verbose_level(ctx, _, verbose):
+def set_logging_level(verbose, quiet):
+
+    root_logger = logging.getLogger()
+    handler = logging.StreamHandler()
+    root_logger.addHandler(handler)
+
     if verbose >= 2:
-        logging.basicConfig(level=logging.DEBUG)
+        handler.setLevel(logging.DEBUG)
     elif verbose == 1:
-        logging.basicConfig(level=logging.INFO)
-
-
-def set_quiet_level(ctx, _, quiet):
-    if quiet == 1:
-        logging.basicConfig(level=logging.ERROR)
+        handler.setLevel(logging.INFO)
+    elif quiet >= 1:
+        handler.setLevel(logging.ERROR)
+    else:
+        handler.setLevel(logging.WARNING)
 
 
 def prepare_early_time(ctx, _, early_time):
@@ -281,6 +286,20 @@ def default_intervals(
     return start_date, end_date, updated_start_date, updated_end_date
 
 
+def log_bad_requests_to_file(ctx, _, bad_request_file):
+
+    if bad_request_file:
+
+        class RequestMissedFilter(logging.Filter):
+            def filter(self, record):
+                return getattr(record, "log_type", "") == "request_missed"
+
+        file_handler = logging.FileHandler(bad_request_file)
+        file_handler.setLevel(logging.WARNING)
+        file_handler.addFilter(RequestMissedFilter())
+        logging.getLogger().addHandler(file_handler)
+
+
 @click.command()
 @click.option(
     "-s",
@@ -315,10 +334,8 @@ def default_intervals(
     help="service types to fetch",
     callback=validate_request_type,
 )
-@click.option(
-    "-v", "--verbose", count=True, help="verbosity level", callback=set_verbose_level
-)
-@click.option("-q", "--quiet", count=True, help="quiet level", callback=set_quiet_level)
+@click.option("-v", "--verbose", count=True, help="verbosity level")
+@click.option("-q", "--quiet", count=True, help="quiet level")
 @click.option(
     "--list-request-types",
     is_flag=True,
@@ -333,6 +350,12 @@ def default_intervals(
     default=10,
     show_default=True,
 )
+@click.option(
+    "--bad-request-file",
+    default=None,
+    help="Path to log file for bad requests",
+    callback=log_bad_requests_to_file,
+)
 def main(
     start_date: datetime.datetime,
     end_date: datetime.datetime,
@@ -343,12 +366,18 @@ def main(
     request_type,
     list_request_types: bool,
     parallel: int,
+    bad_request_file,
 ) -> None:
     """Download service requests from the Chicago Open311 API. By
     default, today's requests of all types. Will write service
     requests as line-delimited JSON to stdout."""
     if verbose and quiet:
         raise click.UsageError("can't set both -v and -q flags")
+
+    root_logger = logging.getLogger()
+    root_logger.setLevel(logging.DEBUG)
+
+    set_logging_level(verbose, quiet)
 
     start_date, end_date, updated_start_date, updated_end_date = default_intervals(
         start_date, end_date, updated_start_date, updated_end_date
