@@ -8,7 +8,6 @@ import zoneinfo
 from typing import Any, Generator, Iterable
 
 import click
-import requests.adapters
 import scrapelib
 import tabulate
 import tqdm
@@ -65,9 +64,7 @@ class Downloader:
     @property
     def session(self):
         if not self._session:
-            self._session = APIScraper(
-                requests_per_minute=0, retry_attempts=5, retry_wait_seconds=10
-            )
+            self._session = APIScraper(requests_per_minute=0)
             self._session.timeout = 30
 
         return self._session
@@ -86,35 +83,58 @@ class Downloader:
         )
         return args
 
+    def bisect(self, args):
+
+        start_record = (args["page"] - 1) * args["page_size"]
+        page_size = args["page_size"]
+
+        if page_size > 1:
+
+            page_size = args["page_size"] = page_size // 2
+            args.update({"page": start_record // page_size + 1})
+
+            for branch in (0, 1):
+                args["page"] = args["page"] + branch
+                try:
+                    logging.info(
+                        "bisecting into {start}-{stop}".format(
+                            start=(args["page"] - 1) * args["page_size"],
+                            stop=args["page"] * args["page_size"],
+                        )
+                    )
+                    yield from self.session.get(self.BASE_URL, params=args).json()
+                except scrapelib.HTTPError as e:
+                    if page_size > 1:
+                        yield from self.bisect(args.copy())
+                    else:
+                        warnings.warn(
+                            "Could not load {url}. We will miss this request from {date}".format(
+                                url=e.response.request.url, date=args["start_date"][:10]
+                            )
+                        )
+
     def __call__(
         self, interval: tuple[datetime.datetime, datetime.datetime]
     ) -> list[dict[str, Any]]:
         start, end = interval
         results = []
-        page_size = 200
+        page_size = 128
         args = self.prepare_args(start, end, page_size)
+
         try:
             page = self.session.get(self.BASE_URL, params=args).json()
-        except scrapelib.HTTPError as e:
-            warnings.warn(
-                "Could not load {url}. We will miss some requests from {date}".format(
-                    url=e.response.request.url, date=start.date()
-                )
-            )
-            page = []
+        except scrapelib.HTTPError:
+            page = list(self.bisect(args.copy()))
+
         results.extend(page)
 
-        while len(page) == page_size:
+        while page:
             args["page"] += 1
             try:
                 page = self.session.get(self.BASE_URL, params=args).json()
-            except scrapelib.HTTPError as e:
-                warnings.warn(
-                    "Could not load {url}. We will miss some requests from {date}".format(
-                        url=e.response.request.url, date=start.date()
-                    )
-                )
-                page = []
+            except scrapelib.HTTPError:
+                page = list(self.bisect(args.copy()))
+
             results.extend(page)
 
         return results
@@ -182,7 +202,7 @@ def default_intervals(
     updated_end_date,
 ):
 
-    EARLIEST_DATE = datetime.datetime(2018, 7, 18).replace(
+    EARLIEST_DATE = datetime.datetime(2018, 7, 1).replace(
         tzinfo=zoneinfo.ZoneInfo("America/Chicago")
     )
     TODAY = prepare_late_time(None, None, datetime.datetime.today())
@@ -197,8 +217,11 @@ def default_intervals(
         elif not start_date:
             start_date = EARLIEST_DATE
 
-    if start_date and not end_date:
-        end_date = TODAY
+    if start_date:
+        if start_date < EARLIEST_DATE:
+            start_date = EARLIEST_DATE
+        if not end_date:
+            end_date = TODAY
 
     if updated_end_date:
         if updated_start_date and updated_start_date >= updated_end_date:
@@ -212,8 +235,11 @@ def default_intervals(
         elif not updated_start_date:
             updated_start_date = EARLIEST_DATE
 
-    if updated_start_date and not updated_end_date:
-        updated_end_date = TODAY
+    if updated_start_date:
+        if updated_start_date < EARLIEST_DATE:
+            updated_start_date = EARLIEST_DATE
+        if not updated_end_date:
+            updated_end_date = TODAY
 
     if not start_date and not updated_start_date:
         start_date = prepare_early_time(None, None, datetime.datetime.today())
@@ -272,6 +298,13 @@ def default_intervals(
     help="list valid request types",
     callback=list_request_types,
 )
+@click.option(
+    "--parallel",
+    type=int,
+    help="number of days to request in parallel",
+    default=15,
+    show_default=True,
+)
 def main(
     start_date: datetime.datetime,
     end_date: datetime.datetime,
@@ -279,7 +312,8 @@ def main(
     updated_end_date: datetime.datetime,
     verbose: int,
     request_type,
-    list_request_types,
+    list_request_types: bool,
+    parallel: int,
 ) -> None:
     """Download service requests from the Chicago Open311 API. By
     default, today's requests of all types. Will write service
@@ -297,7 +331,7 @@ def main(
         updated_end_date=updated_end_date,
     )
 
-    with multiprocessing.dummy.Pool(15) as pool:
+    with multiprocessing.dummy.Pool(parallel) as pool:
         for day in tqdm.tqdm(
             pool.imap_unordered(downloader, intervals),
             total=(end_date - start_date).days + 1,
