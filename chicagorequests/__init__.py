@@ -3,11 +3,11 @@ import json
 import logging
 import multiprocessing.dummy
 import sys
-import warnings
 import zoneinfo
 from typing import Any, Generator, Iterable
 
 import click
+import requests
 import scrapelib
 import tabulate
 import tqdm
@@ -32,6 +32,9 @@ class APIScraper(scrapelib.Scraper):
         except json.decoder.JSONDecodeError:
             response.status_code = 500
             raise scrapelib.HTTPError(response)
+
+    def accept_response(self, response):
+        return True
 
 
 def is_power_of_two(n):
@@ -69,7 +72,13 @@ class Downloader:
     @property
     def session(self):
         if not self._session:
-            self._session = APIScraper(requests_per_minute=0)
+            self._session = APIScraper(
+                requests_per_minute=0, retry_attempts=2, retry_wait_seconds=10
+            )
+            adapter = requests.adapters.HTTPAdapter(
+                pool_connections=10, pool_maxsize=100
+            )
+            self._session.mount("http://", adapter)
             self._session.timeout = 30
 
         return self._session
@@ -109,12 +118,14 @@ class Downloader:
                             stop=args["page"] * args["page_size"],
                         )
                     )
-                    yield from self.session.get(self.BASE_URL, params=args).json()
-                except scrapelib.HTTPError as e:
+                    response = self.session.get(self.BASE_URL, params=args)
+                    response.raise_for_status()
+                    yield from response.json()
+                except requests.exceptions.HTTPError as e:
                     if page_size > 1:
                         yield from self.bisect(args.copy())
                     else:
-                        warnings.warn(
+                        logging.warn(
                             "Could not load {url}. We will miss this request from {date}".format(
                                 url=e.response.request.url, date=args["start_date"][:10]
                             )
@@ -129,8 +140,10 @@ class Downloader:
         args = self.prepare_args(start, end, page_size)
 
         try:
-            page = self.session.get(self.BASE_URL, params=args).json()
-        except scrapelib.HTTPError:
+            response = self.session.get(self.BASE_URL, params=args)
+            response.raise_for_status()
+            page = response.json()
+        except requests.exceptions.HTTPError:
             page = list(self.bisect(args.copy()))
 
         results.extend(page)
@@ -138,8 +151,10 @@ class Downloader:
         while page:
             args["page"] += 1
             try:
-                page = self.session.get(self.BASE_URL, params=args).json()
-            except scrapelib.HTTPError:
+                response = self.session.get(self.BASE_URL, params=args)
+                response.raise_for_status()
+                page = response.json()
+            except requests.exceptions.HTTPError:
                 page = list(self.bisect(args.copy()))
 
             results.extend(page)
@@ -179,11 +194,16 @@ def list_request_types(ctx, _, show_list):
         sys.exit()
 
 
-def set_logging_level(ctx, _, verbose):
+def set_verbose_level(ctx, _, verbose):
     if verbose >= 2:
         logging.basicConfig(level=logging.DEBUG)
     elif verbose == 1:
         logging.basicConfig(level=logging.INFO)
+
+
+def set_quiet_level(ctx, _, quiet):
+    if quiet == 1:
+        logging.basicConfig(level=logging.ERROR)
 
 
 def prepare_early_time(ctx, _, early_time):
@@ -296,8 +316,9 @@ def default_intervals(
     callback=validate_request_type,
 )
 @click.option(
-    "-v", "--verbose", count=True, help="verbosity level", callback=set_logging_level
+    "-v", "--verbose", count=True, help="verbosity level", callback=set_verbose_level
 )
+@click.option("-q", "--quiet", count=True, help="quiet level", callback=set_quiet_level)
 @click.option(
     "--list-request-types",
     is_flag=True,
@@ -309,7 +330,7 @@ def default_intervals(
     "--parallel",
     type=int,
     help="number of days to request in parallel",
-    default=15,
+    default=10,
     show_default=True,
 )
 def main(
@@ -318,6 +339,7 @@ def main(
     updated_start_date: datetime.datetime,
     updated_end_date: datetime.datetime,
     verbose: int,
+    quiet: int,
     request_type,
     list_request_types: bool,
     parallel: int,
@@ -325,6 +347,8 @@ def main(
     """Download service requests from the Chicago Open311 API. By
     default, today's requests of all types. Will write service
     requests as line-delimited JSON to stdout."""
+    if verbose and quiet:
+        raise click.UsageError("can't set both -v and -q flags")
 
     start_date, end_date, updated_start_date, updated_end_date = default_intervals(
         start_date, end_date, updated_start_date, updated_end_date
