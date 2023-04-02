@@ -34,6 +34,11 @@ class APIScraper(scrapelib.Scraper):
             raise scrapelib.HTTPError(response)
 
 
+def is_power_of_two(n):
+    """Return True if n is a power of 2, False otherwise."""
+    return n != 0 and (n & (n - 1)) == 0
+
+
 class Downloader:
     BASE_URL = "http://311api.cityofchicago.org/open311/v2/requests.json"
 
@@ -87,6 +92,8 @@ class Downloader:
 
         start_record = (args["page"] - 1) * args["page_size"]
         page_size = args["page_size"]
+
+        assert is_power_of_two(page_size)
 
         if page_size > 1:
 
